@@ -48,6 +48,14 @@ mod mode_compat {
 }
 #[cfg(windows)]
 use mode_compat::{DirBuilderExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt as _;
+#[cfg(windows)]
+// FILE_FLAG_OPEN_REPARSE_POINT: open a symlink itself rather than its target,
+// matching unix O_NOFOLLOW semantics for secret files.
+const O_NOFOLLOW: u32 = 0x0020_0000;
+#[cfg(unix)]
+use libc::O_NOFOLLOW;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
@@ -178,7 +186,7 @@ fn read_config() -> Result<Config, String> {
     let file = path();
     let mut f = match OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(O_NOFOLLOW)
         .open(&file)
     {
         Ok(f) => f,
@@ -625,7 +633,7 @@ fn write_atomic(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
 fn read_private(path: &Path) -> io::Result<Vec<u8>> {
     let mut f = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(O_NOFOLLOW)
         .open(path)?;
     if !f.metadata()?.is_file() {
         return Err(io::Error::other("not a regular file"));
