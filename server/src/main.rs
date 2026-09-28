@@ -60,6 +60,16 @@ use libc::O_NOFOLLOW;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
 #[cfg(unix)]
+fn owner_mode_ok(meta: &fs::Metadata) -> bool {
+    meta.permissions().mode() & 0o777 == 0o600
+}
+#[cfg(windows)]
+fn owner_mode_ok(_meta: &fs::Metadata) -> bool {
+    // No posix mode bits on Windows; user-profile ACLs provide the protection.
+    true
+}
+
+#[cfg(unix)]
 fn restrict_to_owner(out: &fs::File) -> io::Result<()> {
     out.set_permissions(fs::Permissions::from_mode(0o600))
 }
@@ -194,7 +204,7 @@ fn read_config() -> Result<Config, String> {
         Err(e) => return Err(format!("Cannot read private config: {e}")),
     };
     let meta = f.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() || meta.permissions().mode() & 0o777 != 0o600 {
+    if !meta.is_file() || !owner_mode_ok(&meta) {
         return Err("Config must be a regular file with mode 0600".into());
     }
     let mut data = String::new();
