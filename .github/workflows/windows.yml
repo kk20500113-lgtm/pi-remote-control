@@ -1,0 +1,37 @@
+name: Windows build (local fork)
+on:
+  push:
+    branches: [windows-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: '1.96'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build web UI
+        run: |
+          npm ci --prefix server/web
+          npm --prefix server/web run build
+      - name: Install Rust
+        run: rustup toolchain install "$env:RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Build server
+        run: cargo build --manifest-path server/Cargo.toml --locked --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prc-windows-amd64
+          path: server/target/release/prc.exe
+          if-no-files-found: error

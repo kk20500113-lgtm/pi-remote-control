@@ -22,12 +22,43 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{mpsc as std_mpsc, Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
+
+// Windows build support: permission-mode call sites below compile unchanged by
+// mapping to no-op traits; on Windows, files live under the user profile and
+// inherit its user-only ACLs, which is the equivalent protection.
+#[cfg(windows)]
+mod mode_compat {
+    pub trait DirBuilderExt {
+        fn mode(&mut self, _mode: u32) -> &mut Self {
+            self
+        }
+    }
+    pub trait OpenOptionsExt {
+        fn mode(&mut self, _mode: u32) -> &mut Self {
+            self
+        }
+    }
+    impl DirBuilderExt for std::fs::DirBuilder {}
+    impl OpenOptionsExt for std::fs::OpenOptions {}
+}
+#[cfg(windows)]
+use mode_compat::{DirBuilderExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+#[cfg(unix)]
+fn restrict_to_owner(out: &fs::File) -> io::Result<()> {
+    out.set_permissions(fs::Permissions::from_mode(0o600))
+}
+#[cfg(windows)]
+fn restrict_to_owner(_out: &fs::File) -> io::Result<()> {
+    Ok(())
+}
 use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
@@ -70,7 +101,12 @@ fn path() -> PathBuf {
     let base = env::var_os("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".config"));
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .unwrap_or_default())
+            .join(".config")
+        });
     base.join("prc/config.json")
 }
 fn check_legacy_config() -> Result<(), String> {
@@ -126,7 +162,7 @@ fn setup() -> Result<(), String> {
     let data =
         json!({"agentToken":random_secret(), "adminPassword":password, "publicOrigin":origin});
     let result = (|| -> std::io::Result<()> {
-        out.set_permissions(fs::Permissions::from_mode(0o600))?;
+        restrict_to_owner(&out)?;
         out.write_all(format!("{}\n", serde_json::to_string_pretty(&data).unwrap()).as_bytes())?;
         out.sync_all()?;
         fs::hard_link(&temp, &file)?;
@@ -228,7 +264,10 @@ fn settings() -> Result<Settings, String> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/state")
+            PathBuf::from(env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .unwrap_or_default())
+            .join(".local/state")
         })
         .join("prc");
     let push = match (public, private) {
